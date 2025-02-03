@@ -1,5 +1,5 @@
 import { useToast } from "@/components/ui/use-toast";
-import { PostsPage, User } from "@/lib/types";
+import { PostsPage } from "@/lib/types";
 import { useUploadThing } from "@/lib/uploadthing";
 import { UpdateUserProfileValues } from "@/lib/validation";
 import {
@@ -25,12 +25,16 @@ export function useUpdateProfileMutation() {
       values: UpdateUserProfileValues;
       avatar?: File;
     }) => {
-      return Promise.all([
-        updateUserProfile(values),
-        avatar ? startAvatarUpload([avatar]) : Promise.resolve(undefined),
-      ]);
+      // Update the user profile
+      const updatedUser = await updateUserProfile(values);
+
+      // Upload the avatar if provided
+      const uploadResult = avatar ? await startAvatarUpload([avatar]) : undefined;
+
+      // Return both the updated user and the upload result
+      return { updatedUser, uploadResult };
     },
-    onSuccess: async ([updatedUser, uploadResult]) => {
+    onSuccess: async ({ updatedUser, uploadResult }) => {
       if (!updatedUser) {
         toast({
           variant: "destructive",
@@ -39,18 +43,20 @@ export function useUpdateProfileMutation() {
         return;
       }
 
-      const newAvatarUrl = uploadResult?.[0]?.serverData?.avatarUrl;
+      // Get the new avatar URL if the upload was successful
+      const newAvatarUrl = uploadResult?.[0]?.url ?? updatedUser.avatarUrl;
 
-      const queryFilter: QueryFilters = {
-        queryKey: ["post-feed"],
-      };
+      // Define the query key
+      const queryKey = ["post-feed"];
 
-      await queryClient.cancelQueries(queryFilter);
+      // Cancel any ongoing queries for the post feed
+      await queryClient.cancelQueries({ queryKey });
 
+      // Update the cached post feed data with the new user profile information
       queryClient.setQueriesData<InfiniteData<PostsPage, string | null>>(
-        queryFilter,
+        { queryKey } as QueryFilters<InfiniteData<PostsPage, string | null>, Error>,
         (oldData) => {
-          if (!oldData) return oldData; // Ensure oldData isn't undefined
+          if (!oldData) return oldData;
 
           return {
             ...oldData,
@@ -61,8 +67,8 @@ export function useUpdateProfileMutation() {
                   ? {
                       ...post,
                       user: {
-                        ...updatedUser,
-                        avatarUrl: newAvatarUrl || updatedUser.avatarUrl,
+                        ...post.user,
+                        avatarUrl: newAvatarUrl,
                       },
                     }
                   : post
@@ -72,13 +78,15 @@ export function useUpdateProfileMutation() {
         }
       );
 
+      // Refresh the page to reflect the changes
       router.refresh();
 
+      // Show a success toast
       toast({
         description: "Profile updated successfully!",
       });
     },
-    onError(error) {
+    onError: (error) => {
       console.error("Profile update error:", error);
       toast({
         variant: "destructive",
