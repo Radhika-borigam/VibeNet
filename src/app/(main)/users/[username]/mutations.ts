@@ -1,5 +1,5 @@
 import { useToast } from "@/components/ui/use-toast";
-import { PostsPage } from "@/lib/types";
+import { PostsPage, User } from "@/lib/types";
 import { useUploadThing } from "@/lib/uploadthing";
 import { UpdateUserProfileValues } from "@/lib/validation";
 import {
@@ -13,11 +13,8 @@ import { updateUserProfile } from "./actions";
 
 export function useUpdateProfileMutation() {
   const { toast } = useToast();
-
   const router = useRouter();
-
   const queryClient = useQueryClient();
-
   const { startUpload: startAvatarUpload } = useUploadThing("avatar");
 
   const mutation = useMutation({
@@ -30,11 +27,19 @@ export function useUpdateProfileMutation() {
     }) => {
       return Promise.all([
         updateUserProfile(values),
-        avatar && startAvatarUpload([avatar]),
+        avatar ? startAvatarUpload([avatar]) : Promise.resolve(undefined),
       ]);
     },
     onSuccess: async ([updatedUser, uploadResult]) => {
-      const newAvatarUrl = uploadResult?.[0].serverData.avatarUrl;
+      if (!updatedUser) {
+        toast({
+          variant: "destructive",
+          description: "Failed to update profile. Please try again.",
+        });
+        return;
+      }
+
+      const newAvatarUrl = uploadResult?.[0]?.serverData?.avatarUrl;
 
       const queryFilter: QueryFilters = {
         queryKey: ["post-feed"],
@@ -45,37 +50,36 @@ export function useUpdateProfileMutation() {
       queryClient.setQueriesData<InfiniteData<PostsPage, string | null>>(
         queryFilter,
         (oldData) => {
-          if (!oldData) return;
+          if (!oldData) return oldData; // Ensure oldData isn't undefined
 
           return {
-            pageParams: oldData.pageParams,
+            ...oldData,
             pages: oldData.pages.map((page) => ({
-              nextCursor: page.nextCursor,
-              posts: page.posts.map((post) => {
-                if (post.user.id === updatedUser.id) {
-                  return {
-                    ...post,
-                    user: {
-                      ...updatedUser,
-                      avatarUrl: newAvatarUrl || updatedUser.avatarUrl,
-                    },
-                  };
-                }
-                return post;
-              }),
+              ...page,
+              posts: page.posts.map((post) =>
+                post.user.id === updatedUser.id
+                  ? {
+                      ...post,
+                      user: {
+                        ...updatedUser,
+                        avatarUrl: newAvatarUrl || updatedUser.avatarUrl,
+                      },
+                    }
+                  : post
+              ),
             })),
           };
-        },
+        }
       );
 
       router.refresh();
 
       toast({
-        description: "Profile updated",
+        description: "Profile updated successfully!",
       });
     },
     onError(error) {
-      console.error(error);
+      console.error("Profile update error:", error);
       toast({
         variant: "destructive",
         description: "Failed to update profile. Please try again.",
